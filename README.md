@@ -112,12 +112,14 @@ rm /var/cache/ldconfig/aux-cache.log
 
 ## Compatibility
 
-| OS | PAM Path | Tested |
-|----|----------|--------|
-| Debian/Ubuntu | `/lib/x86_64-linux-gnu/security/` | Yes |
-| RHEL/CentOS | `/lib64/security/` | - |
-| Photon OS 1.0 | `/usr/lib/security/` | Yes |
-| Generic Linux | `/lib/security/` | - |
+| OS | PAM Path | Auth | Cred Log |
+|----|----------|------|----------|
+| Photon OS 1.0 | `/usr/lib/security/` | Yes | Yes |
+| Debian 12 | `/lib/x86_64-linux-gnu/security/` | Yes | No* |
+| RHEL/CentOS | `/lib64/security/` | - | - |
+| Generic Linux | `/lib/security/` | - | - |
+
+*OpenSSH 9.x scrubs passwords before returning them to PAM modules. Credential logging only works on OpenSSH < 9.0.
 
 ## Legal
 

