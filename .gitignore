@@ -1,0 +1,20 @@
+# Compiled objects
+*.o
+*.so
+
+# Editor files
+*~
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# Vagrant
+.vagrant/
+
+# Docker
+*.log
+
+# Temporary files
+*.tmp
+*.bak
